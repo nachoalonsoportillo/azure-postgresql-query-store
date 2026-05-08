@@ -40,7 +40,7 @@ TIER=${TIER:-GeneralPurpose}
 STORAGE_SIZE=${STORAGE_SIZE:-64}
 VERSION=${VERSION:-17}
 PRIMARY_DATABASE=${PRIMARY_DATABASE:-postgres}
-SQL_BASE_URL=${SQL_BASE_URL:-https://raw.githubusercontent.com/nachoalonsoportillo/query-store-blog/refs/heads/main/may2026}
+SQL_BASE_URL=${SQL_BASE_URL:-https://raw.githubusercontent.com/Azure-Samples/azure-postgresql-query-store/refs/heads/main/may2026}
 TPCH_DDL_URL=${TPCH_DDL_URL:-${SQL_BASE_URL}/schema/tpch_ddl.sql}
 WORKLOAD_REPETITIONS=${WORKLOAD_REPETITIONS:-10}
 AUTO_APPROVE=$(printf '%s' "${AUTO_APPROVE:-false}" | tr '[:upper:]' '[:lower:]')
@@ -110,7 +110,7 @@ configure_diagnostics_for_server() {
     --resource "$server_resource_id" \
     --workspace "$workspace_id" \
     --export-to-resource-specific true \
-    --logs '[{"category":"PostgreSQLFlexQueryStoreRuntime","enabled":true},{"category":"PostgreSQLFlexQueryStoreWaitStats","enabled":true},{"category":"PostgreSQLQueryStoreSqlText","enabled":true}]' \
+    --logs '[{"category":"PostgreSQLFlexQueryStoreRuntime","enabled":true},{"category":"PostgreSQLFlexQueryStoreWaitStats","enabled":true},{"category":"PostgreSQLQueryStoreSqlText","enabled":true},{"category":"PostgreSQLFlexSessions","enabled":true}]' \
     --only-show-errors >/dev/null
 }
 
@@ -119,20 +119,6 @@ configure_query_store_for_server() {
   local server_name="$2"
 
   printf "Setting query store parameters on server %s...\n" "$server_name"
-  az postgres flexible-server parameter set \
-    --resource-group "$rg" \
-    --server-name "$server_name" \
-    --name pg_qs.interval_length_minutes \
-    --value 1 \
-    --only-show-errors >/dev/null
-
-  az postgres flexible-server parameter set \
-    --resource-group "$rg" \
-    --server-name "$server_name" \
-    --name pg_qs.query_capture_mode \
-    --value all \
-    --only-show-errors >/dev/null
-
   az postgres flexible-server parameter set \
     --resource-group "$rg" \
     --server-name "$server_name" \
@@ -146,18 +132,12 @@ configure_query_store_for_server() {
     --name pg_qs.emit_query_text \
     --value on \
     --only-show-errors >/dev/null
-}
 
-configure_index_tuning_for_server() {
-  local rg="$1"
-  local server_name="$2"
-
-  printf "Setting index_tuning.mode on server %s...\n" "$server_name"
   az postgres flexible-server parameter set \
     --resource-group "$rg" \
     --server-name "$server_name" \
-    --name index_tuning.mode \
-    --value report \
+    --name track_io_timing \
+    --value on \
     --only-show-errors >/dev/null
 }
 
@@ -279,7 +259,6 @@ az postgres flexible-server create \
 open_firewall_for_server "$RESOURCE_GROUP" "$PRIMARY_SERVER"
 configure_diagnostics_for_server "$RESOURCE_GROUP" "$PRIMARY_SERVER" "$workspaceResourceId"
 configure_query_store_for_server "$RESOURCE_GROUP" "$PRIMARY_SERVER"
-configure_index_tuning_for_server "$RESOURCE_GROUP" "$PRIMARY_SERVER"
 download_and_execute_sql_against_server "$RESOURCE_GROUP" "$PRIMARY_SERVER" "$PRIMARY_DATABASE" "$TPCH_DDL_URL"
 
 for sql_name in customer.sql lineitem.sql nation.sql orders.sql part.sql partsupp.sql region.sql supplier.sql; do
@@ -298,7 +277,6 @@ az postgres flexible-server replica create \
 
 open_firewall_for_server "$RESOURCE_GROUP" "$REPLICA_1"
 configure_diagnostics_for_server "$RESOURCE_GROUP" "$REPLICA_1" "$workspaceResourceId"
-configure_query_store_for_server "$RESOURCE_GROUP" "$REPLICA_1"
 
 printf "Creating second-level read replica %s from %s...\n" "$REPLICA_2" "$REPLICA_1"
 az postgres flexible-server replica create \
@@ -311,7 +289,9 @@ az postgres flexible-server replica create \
 
 open_firewall_for_server "$RESOURCE_GROUP" "$REPLICA_2"
 configure_diagnostics_for_server "$RESOURCE_GROUP" "$REPLICA_2" "$workspaceResourceId"
-configure_query_store_for_server "$RESOURCE_GROUP" "$REPLICA_2"
+
+printf "Waiting 30 minutes for diagnostic settings to take effect...\n"
+sleep 1800
 
 printf "Running workload query scripts across the primary and replicas %s times each...\n" "$WORKLOAD_REPETITIONS"
 for server_name in "$PRIMARY_SERVER" "$REPLICA_1" "$REPLICA_2"; do
